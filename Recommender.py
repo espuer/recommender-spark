@@ -3,20 +3,16 @@ import sys
 if sys.version >= '3':
    long = int
 
-from math import sqrt
 from pyspark.sql import SparkSession, Row
-from pyspark.ml.recommendation import ALS
 from pyspark.ml.evaluation import RegressionEvaluator
+from algorithm import BaseLine, ALS
 
 class Recommender:
    def __init__(self):
       self.spark = None
-      self.trainData = None
-      self.testData = None
-      self.model = None
-      self.ratings = None
+      self.trainDF = None
+      self.testDF = None
       self.models = {}
-      self.predictions = {}
 
    def __enter__(self):
       self.spark = SparkSession\
@@ -38,38 +34,40 @@ class Recommender:
       ratingsRDD = parts.map(lambda p: Row(userId=int(p[0]), movieId=int(p[1]),
                                            rating=float(p[2]),
                                            timestamp=long(p[3])))
-      self.ratings = self.spark.createDataFrame(ratingsRDD).cache()
-      (self.trainData, self.testData) = self.ratings.randomSplit([0.8, 0.2])
+      ratings = self.spark.createDataFrame(ratingsRDD).cache()
+      (self.trainDF, self.testDF) = ratings.randomSplit([0.8, 0.2])
 
-   def train(self, algorithm='baseline'):
-      if algorithm == 'ALS':
-         model[algorithm] = ALS.train(self.trainData)
+   def train(self, algorithm="baseline"):
+      if algorithm == "baseline":
+         self.models["baseline"] = BaseLine().train(self.trainDF)
+         return
 
+      if algorithm == "ALS":
+         self.models["ALS"] = ALS().train(self.trainDF)
+         return
 
-   def evaluateModel(self, algorithm='baseline'):
-      
-      # Because random split [0.8, 0.2] could make some users in test data
-      # has no rating data for their recommendations - which makes ALS predict
-      # 'null' in prediction, we drop those data. Those data should be less
-      # than 0.1% and hence not affect test rmse.
-      totalCount = self.testData.count()
-      predictions = self.model.transform(self.testData).dropna()
-      dropCount = totalCount - predictions.count()
-      print("ALS: Dropped {} values due to null predictions ({:f}% of total data)"\
-           .format(dropCount, float(dropCount) / totalCount * 100))
+      print("unknown alogrithm for train: " + algorithm)
 
+   def evaluateModel(self, algorithm="baseline"):
+      predictions = None
+      if algorithm == "ALS":
+         predictions = ALS().predict(self.models["ALS"], self.testDF)
+
+      if algorithm == "baseline":
+         predictions = BaseLine().predict(self.models["baseline"], self.testDF)
+
+      if predictions is None:
+         print("unknown alogrithm for evaluateModel: " + algorithm)
+         return
+      # evaluate result using RMSE metric
       evaluator = RegressionEvaluator(metricName="rmse", labelCol="rating",
                                       predictionCol="prediction")
       rmse = evaluator.evaluate(predictions)
-      print("RMSE = " + str(rmse))
+      print(algorithm + " RMSE = " + str(rmse))
 
-def computeRmse(testDF):
-   n = testDF.count()
-   return sqrt(testDF.map(lambda x: (x[1] - x[4]) ** 2).reduce(add) / float(n))
-
-dataPath = "rc/ml-1m/ratings.dat"
-#dataPath = "rc/somedata.dat"
 #dataPath = "data/mllib/als/sample_movielens_ratings.txt"
+dataPath = "rc/ml-1m/ratings.dat"
+algorithms = ["baseline", "ALS"]
 
 if __name__ == "__main__":
    print("recommender initialized...")
@@ -78,10 +76,10 @@ if __name__ == "__main__":
       recommender.readData(dataPath)
 
       print("train data... ")
-      recommender.train()
+      for algo in algorithms:
+         recommender.train(algo)
 
       print("evalute model using test data... ")
-      recommender.evaluateModel()
+      for algo in algorithms:
+         recommender.evaluateModel(algo)
       
-      #print("RMSE = " + computeRmse(recommender.predictedTestDF))
-      #print("RMSE = " + str(recommender.rmse))
